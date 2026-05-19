@@ -90,7 +90,7 @@ export async function POST(req: Request) {
 
     // SG-6: Compute deterministic skill ground truth before calling Claude
     let groundTruth: SkillGroundTruth | null = null;
-    let listingSkillsForDb: { name: string; is_required: boolean; is_matched: boolean }[] = [];
+    const listingSkillsForDb: { name: string; is_required: boolean; is_matched: boolean }[] = [];
 
     try {
       const taxonomy = await getTaxonomyIndex();

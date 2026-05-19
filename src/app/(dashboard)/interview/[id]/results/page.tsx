@@ -2,7 +2,7 @@ import { redirect, notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { FitScoreArc } from "@/components/jobs/FitScoreArc";
 import Link from "next/link";
-import { ArrowLeft, RefreshCw, Briefcase, FileText, Target, ShieldAlert, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, RefreshCw, Briefcase, ShieldAlert } from "lucide-react";
 import { ExportInterviewButton } from "@/components/interview/ExportInterviewButton";
 import { InterviewSession, InterviewQuestion } from "@/types";
 
