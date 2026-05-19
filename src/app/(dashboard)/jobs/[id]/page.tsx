@@ -4,6 +4,8 @@ import { JobAnalysis, SalaryEstimate, ParsedCvData, TailoredCv } from "@/types";
 import { FitScoreArc } from "@/components/jobs/FitScoreArc";
 import { TrackApplicationButton } from "@/components/jobs/TrackApplicationButton";
 import { ConfidenceBadge } from "@/components/ui/ConfidenceBadge";
+import { CalibrationBadge } from "@/components/jobs/CalibrationBadge";
+import { QuickApplyButton } from "@/components/jobs/QuickApplyButton";
 import { TailoredCvView } from "@/components/cv/TailoredCvView";
 import { CompanyContextPanel } from "@/components/jobs/CompanyContextPanel";
 import Link from "next/link";
@@ -100,14 +102,19 @@ export default async function JobAnalysisResultPage({ params }: PageProps) {
   const [{ data: analysisData, error }, cvResult, tailoredResult] = await Promise.all([
     supabase.from("job_analyses").select("*").eq("id", analysisId).eq("user_id", user.id).single(),
     supabase.from("cvs").select("parsed_data").eq("user_id", user.id).eq("is_active", true).maybeSingle(),
-    supabase.from("tailored_cvs").select("*").eq("job_analysis_id", analysisId).eq("user_id", user.id).maybeSingle(),
+    supabase
+      .from("tailored_cvs")
+      .select("*")
+      .eq("job_analysis_id", analysisId)
+      .eq("user_id", user.id)
+      .order("version", { ascending: false }),
   ]);
 
   if (error || !analysisData) notFound();
 
   const analysis = analysisData as JobAnalysis;
   const parsedCv = (cvResult.data?.parsed_data as ParsedCvData | null) ?? null;
-  const existingTailored = tailoredResult.data as TailoredCv | null;
+  const tailoredVersions = (tailoredResult.data as TailoredCv[] | null) ?? [];
 
   const rec = analysis.recommendation || "maybe";
   let recTheme = "bg-yellow-500/10 text-yellow-500 border-yellow-500/20";
@@ -132,6 +139,11 @@ export default async function JobAnalysisResultPage({ params }: PageProps) {
           {analysis.fit_score_basis && (
             <ConfidenceBadge basis={analysis.fit_score_basis} rationale={analysis.fit_score_rationale} />
           )}
+          <CalibrationBadge
+            fitScore={analysis.fit_score}
+            uncalibratedFitScore={analysis.uncalibrated_fit_score}
+            historySize={analysis.calibration_history_size ?? 0}
+          />
         </div>
         <div className="flex-1 space-y-4 relative z-10 w-full">
           <div>
@@ -240,13 +252,14 @@ export default async function JobAnalysisResultPage({ params }: PageProps) {
           <TailoredCvView
             jobAnalysisId={analysis.id}
             originalCv={parsedCv}
-            initialTailored={existingTailored ?? undefined}
+            versions={tailoredVersions}
           />
         </div>
       )}
 
       {/* CTAs */}
       <div className="pt-6 border-t border-[#2d2a26] flex flex-wrap items-center gap-3 sm:justify-end">
+        <QuickApplyButton jobAnalysisId={analysis.id} />
         <TrackApplicationButton
           jobAnalysisId={analysis.id}
           jobTitle={analysis.job_title}

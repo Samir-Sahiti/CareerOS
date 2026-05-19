@@ -8,6 +8,7 @@ import { generateInterviewSchema } from "@/lib/validation/schemas";
 import { buildInterviewGenerationPrompt } from "@/lib/ai/prompts";
 import { logger } from "@/lib/logger";
 import { errorResponse, successResponse, rateLimitResponse } from "@/lib/apiResponse";
+import { trackedAICall } from "@/lib/ai/trackedCall";
 
 export const maxDuration = 60;
 
@@ -60,20 +61,24 @@ export async function POST(req: Request) {
       return rateLimitResponse(rateLimit.message!);
     }
 
-    const { object: result } = await generateObject({
-      model: anthropic("claude-haiku-4-5"),
-      schema: z.object({
-        questions: z.array(
-          z.object({
-            id: z.string().describe("A unique slug or identifier string for the question"),
-            question_text: z.string(),
-            type: z.enum(["behavioral", "technical", "role-specific"]),
-            guidance: z.string(),
-          })
-        ),
-      }),
-      prompt: buildInterviewGenerationPrompt(parsedCv, jobTitle, companyName),
-    });
+    const { object: result } = await trackedAICall(
+      { route: "/api/interview/generate", userId: user.id, model: "claude-haiku-4-5", aiFunction: "generateObject" },
+      () =>
+        generateObject({
+          model: anthropic("claude-haiku-4-5"),
+          schema: z.object({
+            questions: z.array(
+              z.object({
+                id: z.string().describe("A unique slug or identifier string for the question"),
+                question_text: z.string(),
+                type: z.enum(["behavioral", "technical", "role-specific"]),
+                guidance: z.string(),
+              })
+            ),
+          }),
+          prompt: buildInterviewGenerationPrompt(parsedCv, jobTitle, companyName),
+        })
+    );
 
     const cleanQuestions = result.questions.filter((q) => q.question_text?.trim().length > 0);
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import { CareerRoadmap, RoadmapItem, RoadmapItemStatus } from "@/types";
@@ -16,8 +16,12 @@ import {
   Circle,
   PlayCircle,
   ChevronDown,
+  Check,
+  BookOpen,
 } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
+import { findResourceSlug } from "@/lib/learningResources";
 
 interface Props {
   roadmap: CareerRoadmap;
@@ -42,8 +46,49 @@ export function RoadmapDisplay({ roadmap, initialItems }: Props) {
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [items, setItems] = useState<RoadmapItem[]>(initialItems);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [selectedPathIdx, setSelectedPathIdx] = useState<number | null>(roadmap.selected_path_idx);
+  const [selecting, setSelecting] = useState<number | null>(null);
+
+  // Keep local state in sync with server props after router.refresh() / regeneration.
+  // Without this, the items array stays frozen at first-mount values even when the
+  // server returns fresh data (e.g. after Refresh Roadmap).
+  useEffect(() => {
+    setItems(initialItems);
+  }, [initialItems]);
+
+  useEffect(() => {
+    setSelectedPathIdx(roadmap.selected_path_idx);
+  }, [roadmap.id, roadmap.selected_path_idx]);
+
+  const selectPath = async (idx: number) => {
+    if (selectedPathIdx === idx || selecting !== null) return;
+    setSelecting(idx);
+    try {
+      const res = await fetch("/api/career/roadmap", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roadmap_id: roadmap.id, selected_path_idx: idx }),
+      });
+      if (!res.ok) {
+        const body = await res.json();
+        throw new Error(body.error || "Failed to select path");
+      }
+      setSelectedPathIdx(idx);
+      toast.success(`Focused on ${roadmap.paths[idx]?.next_role ?? "this path"}`);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to select path");
+    } finally {
+      setSelecting(null);
+    }
+  };
 
   const handleRefresh = async () => {
+    if (selectedPathIdx !== null) {
+      const confirmed = window.confirm(
+        "Refresh will regenerate all paths from scratch — your current focus may change or no longer exist. Continue?"
+      );
+      if (!confirmed) return;
+    }
     setIsRefreshing(true);
     try {
       const res = await fetch("/api/career/roadmap", {
@@ -55,7 +100,7 @@ export function RoadmapDisplay({ roadmap, initialItems }: Props) {
         const body = await res.json();
         throw new Error(body.error || "Failed to refresh roadmap");
       }
-      toast.success("Roadmap successfully updated!");
+      toast.success("Roadmap regenerated — pick a path to focus on.");
       router.refresh();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "An error occurred");
@@ -85,10 +130,18 @@ export function RoadmapDisplay({ roadmap, initialItems }: Props) {
 
   const paths = roadmap.paths || [];
 
-  // Progress summary
-  const totalItems = items.length;
-  const doneItems = items.filter((i) => i.status === "done").length;
+  // Items the user actually sees in "Your Progress" — filtered to the active path
+  // when one has been chosen. Items with no path_idx (legacy rows) show only when
+  // nothing is selected.
+  const visibleItems =
+    selectedPathIdx === null ? items : items.filter((i) => i.path_idx === selectedPathIdx);
+
+  // Progress summary scoped to visible items
+  const totalItems = visibleItems.length;
+  const doneItems = visibleItems.filter((i) => i.status === "done").length;
   const progressPct = totalItems > 0 ? Math.round((doneItems / totalItems) * 100) : 0;
+
+  const selectedPath = selectedPathIdx !== null ? paths[selectedPathIdx] : null;
 
   return (
     <div className="max-w-7xl mx-auto space-y-12 pb-24 animate-fade-in-up">
@@ -146,43 +199,74 @@ export function RoadmapDisplay({ roadmap, initialItems }: Props) {
       {/* ── Living Items (tracked skills + projects) ──────────────────────── */}
       {items.length > 0 && (
         <div className="space-y-4">
-          <h2 className="text-lg font-bold text-white">Your Progress</h2>
+          <div className="flex items-baseline justify-between gap-3 flex-wrap">
+            <h2 className="text-lg font-bold text-white">
+              Your Progress
+              {selectedPath && (
+                <span className="ml-2 text-xs font-medium text-amber-300/80 uppercase tracking-wide">
+                  · {selectedPath.next_role}
+                </span>
+              )}
+            </h2>
+            {selectedPathIdx === null && paths.length > 1 && (
+              <p className="text-xs text-amber-300/80">
+                Pick a path below to focus your progress on just those items.
+              </p>
+            )}
+          </div>
+          {visibleItems.length === 0 ? (
+            <div className="text-sm text-gray-500 bg-[#1a1916] border border-[#2d2a26] rounded-xl p-6 text-center">
+              No items for this path yet — pick a different path or refresh the roadmap.
+            </div>
+          ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {items.map((item) => {
+            {visibleItems.map((item) => {
               const cfg = STATUS_CONFIG[item.status];
               const Icon = cfg.icon;
               const isUpdating = updatingId === item.id;
+              const learnSlug = item.item_type === "skill" ? findResourceSlug(item.title) : null;
+              const wrapperBg =
+                item.status === "done"
+                  ? "bg-green-500/5 border-green-500/20 opacity-70"
+                  : item.status === "in_progress"
+                    ? "bg-amber-500/5 border-amber-500/20"
+                    : "bg-[#1a1916] border-[#2d2a26] hover:border-white/20";
               return (
-                <button
-                  key={item.id}
-                  onClick={() => toggleItemStatus(item)}
-                  disabled={isUpdating}
-                  className={`group text-left p-4 rounded-xl border transition-all ${
-                    item.status === "done"
-                      ? "bg-green-500/5 border-green-500/20 opacity-70"
-                      : item.status === "in_progress"
-                      ? "bg-amber-500/5 border-amber-500/20"
-                      : "bg-[#1a1916] border-[#2d2a26] hover:border-white/20"
-                  }`}
-                >
-                  <div className="flex items-start gap-2">
-                    <Icon className={`w-4 h-4 shrink-0 mt-0.5 ${cfg.color} ${isUpdating ? "animate-pulse" : ""}`} />
-                    <div className="min-w-0 flex-1">
-                      <p className={`text-sm font-medium leading-tight ${item.status === "done" ? "line-through text-gray-500" : "text-white"}`}>
-                        {item.title}
-                      </p>
-                      {item.description && (
-                        <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{item.description}</p>
-                      )}
-                      <span className={`text-[10px] font-semibold uppercase tracking-wide mt-1.5 block ${cfg.color}`}>
-                        {item.item_type} · {cfg.label}
-                      </span>
+                <div key={item.id} className={`group rounded-xl border transition-all flex flex-col ${wrapperBg}`}>
+                  <button
+                    onClick={() => toggleItemStatus(item)}
+                    disabled={isUpdating}
+                    className="text-left p-4 flex-1 w-full"
+                  >
+                    <div className="flex items-start gap-2">
+                      <Icon className={`w-4 h-4 shrink-0 mt-0.5 ${cfg.color} ${isUpdating ? "animate-pulse" : ""}`} />
+                      <div className="min-w-0 flex-1">
+                        <p className={`text-sm font-medium leading-tight ${item.status === "done" ? "line-through text-gray-500" : "text-white"}`}>
+                          {item.title}
+                        </p>
+                        {item.description && (
+                          <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{item.description}</p>
+                        )}
+                        <span className={`text-[10px] font-semibold uppercase tracking-wide mt-1.5 block ${cfg.color}`}>
+                          {item.item_type} · {cfg.label}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                </button>
+                  </button>
+                  {learnSlug && (
+                    <Link
+                      href={`/resources#${learnSlug}`}
+                      className="flex items-center gap-1.5 px-4 py-2 border-t border-[#2d2a26] text-[11px] font-semibold text-gray-500 hover:text-amber-300 transition-colors"
+                    >
+                      <BookOpen className="w-3 h-3" />
+                      Learn →
+                    </Link>
+                  )}
+                </div>
               );
             })}
           </div>
+          )}
           <p className="text-xs text-gray-600">Click any item to cycle its status: Not started → In progress → Done.</p>
         </div>
       )}
@@ -193,21 +277,37 @@ export function RoadmapDisplay({ roadmap, initialItems }: Props) {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
           {paths.map((path, idx) => {
             const isExpanded = expandedIdx === idx;
+            const isActive = selectedPathIdx === idx;
+            const isSelecting = selecting === idx;
             return (
               <div
                 key={idx}
-                className={`bg-[#0f0e0c] border ${isExpanded ? "border-blue-500 shadow-lg shadow-blue-500/10" : "border-[#2d2a26] hover:border-amber-500/40"} rounded-2xl flex flex-col relative overflow-hidden transition-all duration-300`}
+                className={`bg-[#0f0e0c] border ${
+                  isActive
+                    ? "border-amber-500 shadow-lg shadow-amber-500/10"
+                    : isExpanded
+                      ? "border-blue-500 shadow-lg shadow-blue-500/10"
+                      : "border-[#2d2a26] hover:border-amber-500/40"
+                } rounded-2xl flex flex-col relative overflow-hidden transition-all duration-300`}
               >
                 <button
                   onClick={() => setExpandedIdx(isExpanded ? null : idx)}
-                  className="p-6 sm:p-8 text-left w-full relative z-10 group cursor-pointer"
+                  className="p-6 sm:p-8 pb-4 text-left w-full relative z-10 group cursor-pointer"
                 >
                   <div className="absolute inset-0 bg-gradient-to-br from-blue-600/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
 
                   <div className="relative z-10 space-y-4">
-                    <span className={`inline-block px-3 py-1 bg-[#1a1916] border ${isExpanded ? "border-blue-500 text-amber-300" : "border-gray-700 text-gray-300"} text-xs font-bold uppercase tracking-widest rounded-md transition-colors`}>
-                      {path.path_title}
-                    </span>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className={`inline-block px-3 py-1 bg-[#1a1916] border ${isExpanded ? "border-blue-500 text-amber-300" : "border-gray-700 text-gray-300"} text-xs font-bold uppercase tracking-widest rounded-md transition-colors`}>
+                        {path.path_title}
+                      </span>
+                      {isActive && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[10px] font-bold uppercase tracking-wider rounded-full">
+                          <Check className="w-3 h-3" />
+                          Active
+                        </span>
+                      )}
+                    </div>
                     <div className="flex items-center justify-between gap-4">
                       <h2 className="text-2xl font-bold text-white flex items-center gap-3">
                         <Target className="w-6 h-6 text-amber-400 shrink-0" />
@@ -217,6 +317,20 @@ export function RoadmapDisplay({ roadmap, initialItems }: Props) {
                     </div>
                   </div>
                 </button>
+
+                <div className="px-6 sm:px-8 pb-6 relative z-10">
+                  <button
+                    onClick={() => selectPath(idx)}
+                    disabled={isActive || isSelecting}
+                    className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+                      isActive
+                        ? "bg-amber-500/10 border-amber-500/30 text-amber-300 cursor-default"
+                        : "bg-[#1a1916] border-[#2d2a26] hover:border-amber-500/50 hover:text-amber-300 text-gray-400"
+                    }`}
+                  >
+                    {isActive ? "This is my focus" : isSelecting ? "Saving…" : "Focus on this path"}
+                  </button>
+                </div>
 
                 <div className={`overflow-hidden transition-all duration-300 ease-in-out ${isExpanded ? "max-h-[2000px] opacity-100 border-t border-gray-800" : "max-h-0 opacity-0"}`}>
                   <div className="p-6 sm:p-8 pt-0 space-y-8 mt-6">

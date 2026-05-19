@@ -8,16 +8,21 @@ import { ParsedCvData, TailoredCv } from "@/types";
 interface Props {
   jobAnalysisId: string;
   originalCv: ParsedCvData;
-  initialTailored?: TailoredCv & { tailoring_notes?: string[]; summary?: string };
+  versions: TailoredCv[];
 }
 
-export function TailoredCvView({ jobAnalysisId, originalCv, initialTailored }: Props) {
-  const [tailored, setTailored] = useState(initialTailored ?? null);
-  const [tailoringNotes, setTailoringNotes] = useState<string[]>(initialTailored?.tailoring_notes ?? []);
-  const [summary, setSummary] = useState<string>(initialTailored?.summary ?? "");
+export function TailoredCvView({ jobAnalysisId, originalCv, versions: initialVersions }: Props) {
+  const [versions, setVersions] = useState<TailoredCv[]>(initialVersions);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(
+    initialVersions[0]?.id ?? null,
+  );
+  const [tailoringNotes, setTailoringNotes] = useState<string[]>([]);
+  const [summary, setSummary] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [view, setView] = useState<"tailored" | "original">("tailored");
+
+  const selectedVersion = versions.find((v) => v.id === selectedVersionId) ?? versions[0] ?? null;
 
   const generate = async () => {
     setLoading(true);
@@ -29,11 +34,25 @@ export function TailoredCvView({ jobAnalysisId, originalCv, initialTailored }: P
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Tailoring failed");
-      setTailored(data);
+
+      const newVersion: TailoredCv = {
+        id: data.id,
+        user_id: data.user_id,
+        cv_id: data.cv_id,
+        job_analysis_id: data.job_analysis_id,
+        tailored_data: data.tailored_data,
+        user_edits: data.user_edits ?? null,
+        version: data.version,
+        created_at: data.created_at,
+        updated_at: data.updated_at,
+      };
+
+      setVersions((prev) => [newVersion, ...prev]);
+      setSelectedVersionId(newVersion.id);
       setTailoringNotes(data.tailoring_notes ?? []);
       setSummary(data.summary ?? "");
       setView("tailored");
-      toast.success("CV tailored for this role");
+      toast.success(`CV tailored — v${newVersion.version}`);
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to tailor CV");
     } finally {
@@ -43,23 +62,44 @@ export function TailoredCvView({ jobAnalysisId, originalCv, initialTailored }: P
 
   const exportPdf = () => window.print();
 
-  const displayCv: ParsedCvData = view === "tailored" && tailored ? tailored.tailored_data : originalCv;
+  const displayCv: ParsedCvData =
+    view === "tailored" && selectedVersion ? selectedVersion.tailored_data : originalCv;
+
+  const formatVersionLabel = (v: TailoredCv) => {
+    const date = new Date(v.created_at);
+    const dateLabel = date.toLocaleDateString("en", { month: "short", day: "numeric" });
+    return `v${v.version} — ${dateLabel}`;
+  };
 
   return (
     <div className="space-y-4">
       {/* Controls */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={generate}
             disabled={loading}
             className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-stone-900 text-sm font-semibold rounded-lg transition-colors"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-            {tailored ? "Re-tailor" : "Tailor CV for this role"}
+            {selectedVersion ? "Re-tailor" : "Tailor CV for this role"}
           </button>
 
-          {tailored && (
+          {versions.length > 1 && (
+            <select
+              value={selectedVersionId ?? ""}
+              onChange={(e) => setSelectedVersionId(e.target.value)}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-[#2d2a26] bg-[#1a1916] text-gray-300 hover:text-white"
+            >
+              {versions.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {formatVersionLabel(v)}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {selectedVersion && (
             <>
               <div className="flex rounded-lg border border-[#2d2a26] overflow-hidden">
                 <button
@@ -79,18 +119,20 @@ export function TailoredCvView({ jobAnalysisId, originalCv, initialTailored }: P
                   Original
                 </button>
               </div>
-              <button
-                onClick={() => setShowNotes((v) => !v)}
-                className="flex items-center gap-1 text-xs text-gray-400 hover:text-white transition-colors"
-              >
-                <Info className="w-3.5 h-3.5" />
-                {showNotes ? "Hide" : "Show"} changes
-                {showNotes ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-              </button>
+              {tailoringNotes.length > 0 && (
+                <button
+                  onClick={() => setShowNotes((v) => !v)}
+                  className="flex items-center gap-1 text-xs text-gray-400 hover:text-white transition-colors"
+                >
+                  <Info className="w-3.5 h-3.5" />
+                  {showNotes ? "Hide" : "Show"} changes
+                  {showNotes ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                </button>
+              )}
             </>
           )}
         </div>
-        {tailored && (
+        {selectedVersion && (
           <button
             onClick={exportPdf}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-[#2d2a26] hover:bg-[#3a3632] text-gray-300 hover:text-white border border-[#2d2a26] rounded-lg text-xs font-medium transition-colors"
@@ -122,14 +164,14 @@ export function TailoredCvView({ jobAnalysisId, originalCv, initialTailored }: P
       )}
 
       {/* Empty state */}
-      {!tailored && !loading && (
+      {!selectedVersion && !loading && (
         <div className="text-center py-8 text-gray-500 text-sm">
           Click &quot;Tailor CV for this role&quot; to generate a version of your CV optimised for this specific job.
         </div>
       )}
 
       {/* CV Preview */}
-      {tailored && (
+      {selectedVersion && (
         <div className="bg-white text-gray-900 rounded-xl p-6 sm:p-8 space-y-6 print:shadow-none" id="tailored-cv-print">
           {/* Summary */}
           {view === "tailored" && summary && (

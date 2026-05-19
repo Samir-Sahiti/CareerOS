@@ -16,6 +16,7 @@ import {
   ClipboardList,
   BarChart2,
   ChevronDown,
+  BookOpen,
 } from "lucide-react";
 import { SignOutButton } from "@/components/layout/SignOutButton";
 
@@ -30,6 +31,7 @@ const secondaryLinks = [
   { name: "CV Hub",          href: "/cv",           icon: FileText        },
   { name: "Career Ladder",   href: "/career",       icon: TrendingUp      },
   { name: "Cover Letter",    href: "/cover-letter", icon: FileEdit        },
+  { name: "Resources",       href: "/resources",    icon: BookOpen        },
   { name: "Analytics",       href: "/analytics",    icon: BarChart2       },
 ];
 

@@ -7,6 +7,7 @@ import { interviewNextTurnSchema, InterviewNextTurnOutputSchema } from "@/lib/va
 import { buildInterviewNextTurnPrompt } from "@/lib/ai/prompts";
 import { logger } from "@/lib/logger";
 import { errorResponse, successResponse, rateLimitResponse } from "@/lib/apiResponse";
+import { trackedAICall } from "@/lib/ai/trackedCall";
 
 export const maxDuration = 60;
 
@@ -64,20 +65,24 @@ export async function POST(req: Request) {
     const rateLimit = await checkRateLimit(supabase, user.id, "/api/interview/next-turn");
     if (!rateLimit.allowed) return rateLimitResponse(rateLimit.message!);
 
-    const { object } = await generateObject({
-      model: anthropic("claude-haiku-4-5"),
-      schema: InterviewNextTurnOutputSchema,
-      prompt: buildInterviewNextTurnPrompt(
-        cv,
-        jobTitle,
-        company,
-        parentQuestionCount,
-        MAX_PARENT_QUESTIONS,
-        question.question_text,
-        answer,
-        question.type
-      ),
-    });
+    const { object } = await trackedAICall(
+      { route: "/api/interview/next-turn", userId: user.id, model: "claude-haiku-4-5", aiFunction: "generateObject" },
+      () =>
+        generateObject({
+          model: anthropic("claude-haiku-4-5"),
+          schema: InterviewNextTurnOutputSchema,
+          prompt: buildInterviewNextTurnPrompt(
+            cv,
+            jobTitle,
+            company,
+            parentQuestionCount,
+            MAX_PARENT_QUESTIONS,
+            question.question_text,
+            answer,
+            question.type
+          ),
+        })
+    );
 
     await consumeRateLimit(supabase, user.id, "/api/interview/next-turn");
 

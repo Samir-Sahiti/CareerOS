@@ -55,7 +55,7 @@ export function CVParsingStatus({ cvId, initialStatus, initialError }: CVParsing
   }, [cvId, router, supabase]);
 
   useEffect(() => {
-    if (initialStatus === "pending") {
+    if (initialStatus !== "success" && initialStatus !== "failed") {
       poll();
     }
   }, [initialStatus, poll]);
@@ -129,6 +129,15 @@ export function CVParsingStatus({ cvId, initialStatus, initialError }: CVParsing
   }
 
   // ── Pending / processing state ────────────────────────────────────────────
+  const stageMessage =
+    status === "queued"
+      ? "Queued — picking up your CV"
+      : status === "extracting"
+        ? "Reading text from your CV"
+        : status === "analyzing"
+          ? "AI is analysing your experience"
+          : "AI is processing your CV...";
+
   return (
     <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4 animate-fade-in-up">
       <Loader2 className="w-10 h-10 text-amber-500 animate-spin" />
@@ -136,7 +145,7 @@ export function CVParsingStatus({ cvId, initialStatus, initialError }: CVParsing
         className="text-xl font-semibold text-white"
         style={{ fontFamily: "var(--font-heading)" }}
       >
-        AI is processing your CV...
+        {stageMessage}
       </h2>
       <p className="text-gray-400 text-sm">
         This usually takes under a minute. Hang tight.

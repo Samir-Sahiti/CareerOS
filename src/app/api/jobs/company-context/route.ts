@@ -4,6 +4,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { companyContextSchema } from "@/lib/validation/schemas";
 import { logger } from "@/lib/logger";
 import { errorResponse, successResponse } from "@/lib/apiResponse";
+import { trackedAICall } from "@/lib/ai/trackedCall";
 import { z } from "zod";
 
 export const maxDuration = 30;
@@ -45,10 +46,13 @@ export async function GET(req: Request) {
       return successResponse(cached.data);
     }
 
-    const { object } = await generateObject({
-      model: anthropic("claude-haiku-4-5"),
-      schema: CompanyContextOutputSchema,
-      prompt: `Provide factual context about the company "${company}" for a job seeker evaluating whether to apply there.
+    const { object } = await trackedAICall(
+      { route: "/api/jobs/company-context", userId: user.id, model: "claude-haiku-4-5", aiFunction: "generateObject" },
+      () =>
+        generateObject({
+          model: anthropic("claude-haiku-4-5"),
+          schema: CompanyContextOutputSchema,
+          prompt: `Provide factual context about the company "${company}" for a job seeker evaluating whether to apply there.
 
 Return:
 - overview: 1-2 sentences on what the company does, its stage/size, and market position.
@@ -60,7 +64,8 @@ Return:
 - disclaimer: Always return exactly: "Context sourced from AI training data (cutoff: early 2025). Verify with Glassdoor, LinkedIn, and recent news before making decisions."
 
 Be honest about uncertainty. Do not invent specific facts.`,
-    });
+        })
+    );
 
     cache.set(cacheKey, { data: object, ts: Date.now() });
 

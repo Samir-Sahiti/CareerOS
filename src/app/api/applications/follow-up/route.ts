@@ -6,6 +6,7 @@ import { generateFollowUpSchema } from "@/lib/validation/schemas";
 import { buildFollowUpEmailPrompt } from "@/lib/ai/prompts";
 import { logger } from "@/lib/logger";
 import { errorResponse, successResponse, rateLimitResponse } from "@/lib/apiResponse";
+import { trackedAICall } from "@/lib/ai/trackedCall";
 import { ParsedCvData } from "@/types";
 
 export const maxDuration = 60;
@@ -54,10 +55,14 @@ export async function POST(req: Request) {
       cvRole
     );
 
-    const { text } = await generateText({
-      model: anthropic("claude-haiku-4-5"),
-      prompt,
-    });
+    const { text } = await trackedAICall(
+      { route: "/api/applications/follow-up", userId: user.id, model: "claude-haiku-4-5", aiFunction: "generateText" },
+      () =>
+        generateText({
+          model: anthropic("claude-haiku-4-5"),
+          prompt,
+        })
+    );
 
     await consumeRateLimit(supabase, user.id, "/api/applications/follow-up");
 

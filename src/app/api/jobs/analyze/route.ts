@@ -10,6 +10,7 @@ import { logger } from "@/lib/logger";
 import { errorResponse, successResponse, rateLimitResponse } from "@/lib/apiResponse";
 import { getTaxonomyIndex, normalizeSkills, logUnknownSkills } from "@/lib/skills";
 import { extractListingSkills } from "@/lib/skills/extractFromListing";
+import { trackedAICall } from "@/lib/ai/trackedCall";
 
 export const maxDuration = 60;
 
@@ -181,36 +182,41 @@ export async function POST(req: Request) {
     }
 
     // Main analysis call — Claude handles qualitative reasoning, ground truth handles skills
-    const { object: analysis } = await generateObject({
-      model: anthropic("claude-haiku-4-5"),
-      schema: z.object({
-        fit_score: z.number().int(),
-        fit_score_basis: z.enum(["explicit", "inferred", "speculative"]),
-        fit_score_rationale: z.string(),
-        recommendation: z.enum(["apply", "maybe", "skip"]),
-        recommendation_reason: z.string(),
-        cv_suggestions: z.array(z.string()),
-        salary_estimate: z
-          .discriminatedUnion("shown_in_listing", [
-            z.object({
-              shown_in_listing: z.literal(true),
-              currency: z.string(),
-              low: z.number(),
-              mid: z.number(),
-              high: z.number(),
-              negotiation_tip: z.string(),
-            }),
-            z.object({
-              shown_in_listing: z.literal(false),
-              guidance: z.string(),
-              negotiation_tip: z.string(),
-            }),
-          ])
-          .nullable()
-          .optional(),
-      }),
-      prompt: buildJobAnalysisPrompt(parsedCv, jobTitle, company, jobRawText, groundTruth, userHistory),
-    });
+    const { object: analysis } = await trackedAICall(
+      { route: "/api/jobs/analyze", userId: user.id, model: "claude-haiku-4-5", aiFunction: "generateObject" },
+      () =>
+        generateObject({
+          model: anthropic("claude-haiku-4-5"),
+          schema: z.object({
+            uncalibrated_fit_score: z.number().int(),
+            fit_score: z.number().int(),
+            fit_score_basis: z.enum(["explicit", "inferred", "speculative"]),
+            fit_score_rationale: z.string(),
+            recommendation: z.enum(["apply", "maybe", "skip"]),
+            recommendation_reason: z.string(),
+            cv_suggestions: z.array(z.string()),
+            salary_estimate: z
+              .discriminatedUnion("shown_in_listing", [
+                z.object({
+                  shown_in_listing: z.literal(true),
+                  currency: z.string(),
+                  low: z.number(),
+                  mid: z.number(),
+                  high: z.number(),
+                  negotiation_tip: z.string(),
+                }),
+                z.object({
+                  shown_in_listing: z.literal(false),
+                  guidance: z.string(),
+                  negotiation_tip: z.string(),
+                }),
+              ])
+              .nullable()
+              .optional(),
+          }),
+          prompt: buildJobAnalysisPrompt(parsedCv, jobTitle, company, jobRawText, groundTruth, userHistory),
+        })
+    );
 
     // matched_skills/missing_skills come from ground truth when available, Claude otherwise
     const matchedSkills = groundTruth?.matched ?? [];
@@ -227,6 +233,8 @@ export async function POST(req: Request) {
         company: company ?? null,
         job_raw_text: jobRawText,
         fit_score: analysis.fit_score,
+        uncalibrated_fit_score: analysis.uncalibrated_fit_score,
+        calibration_history_size: userHistory?.length ?? 0,
         fit_score_basis: analysis.fit_score_basis,
         fit_score_rationale: analysis.fit_score_rationale,
         recommendation: analysis.recommendation,

@@ -7,6 +7,8 @@ import { generateCoverLetterSchema } from "@/lib/validation/schemas";
 import { buildCoverLetterPrompt, COVER_LETTER_SYSTEM_PROMPT } from "@/lib/ai/prompts";
 import { logger } from "@/lib/logger";
 import { errorResponse, successResponse, rateLimitResponse } from "@/lib/apiResponse";
+import { trackedAICall } from "@/lib/ai/trackedCall";
+import { generateCoverLetterForAnalysis } from "@/lib/ai/generateCoverLetter";
 
 export const maxDuration = 60;
 
@@ -33,6 +35,23 @@ export async function POST(req: Request) {
       return errorResponse("Unauthorized", 401);
     }
 
+    const rateLimit = await checkRateLimit(supabase, user.id, "/api/cover-letter/generate");
+    if (!rateLimit.allowed) {
+      return rateLimitResponse(rateLimit.message!);
+    }
+
+    // Path 1: analysis-based generation — delegate to lib function
+    if (jobAnalysisId) {
+      const result = await generateCoverLetterForAnalysis({
+        supabase,
+        userId: user.id,
+        jobAnalysisId,
+      });
+      await consumeRateLimit(supabase, user.id, "/api/cover-letter/generate");
+      return successResponse({ id: result.letter.id, content: result.letter.content });
+    }
+
+    // Path 2: ad-hoc generation with raw text (legacy entry point)
     const { data: cvData } = await supabase
       .from("cvs")
       .select("parsed_data")
@@ -46,28 +65,15 @@ export async function POST(req: Request) {
 
     const cv = cvData.parsed_data as ParsedCvData;
 
-    // Enrich from job analysis if job text not provided directly
-    let resolvedJobRaw = jobRawText || "";
-    if (jobAnalysisId && !jobRawText) {
-      const { data: analysis } = await supabase
-        .from("job_analyses")
-        .select("job_raw_text")
-        .eq("id", jobAnalysisId)
-        .eq("user_id", user.id)
-        .single();
-      if (analysis) resolvedJobRaw = analysis.job_raw_text;
-    }
-
-    const rateLimit = await checkRateLimit(supabase, user.id, "/api/cover-letter/generate");
-    if (!rateLimit.allowed) {
-      return rateLimitResponse(rateLimit.message!);
-    }
-
-    const { text } = await generateText({
-      model: anthropic("claude-haiku-4-5"),
-      system: COVER_LETTER_SYSTEM_PROMPT,
-      prompt: buildCoverLetterPrompt(cv, jobTitle, company, resolvedJobRaw),
-    });
+    const { text } = await trackedAICall(
+      { route: "/api/cover-letter/generate", userId: user.id, model: "claude-haiku-4-5", aiFunction: "generateText" },
+      () =>
+        generateText({
+          model: anthropic("claude-haiku-4-5"),
+          system: COVER_LETTER_SYSTEM_PROMPT,
+          prompt: buildCoverLetterPrompt(cv, jobTitle, company, jobRawText ?? ""),
+        })
+    );
 
     const content = text.trim();
 
@@ -75,7 +81,7 @@ export async function POST(req: Request) {
       .from("cover_letters")
       .insert({
         user_id: user.id,
-        job_analysis_id: jobAnalysisId || null,
+        job_analysis_id: null,
         job_title: jobTitle,
         company: company || null,
         content,

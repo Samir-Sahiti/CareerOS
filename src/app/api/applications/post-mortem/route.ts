@@ -6,6 +6,7 @@ import { z } from "zod";
 import { logger } from "@/lib/logger";
 import { errorResponse, successResponse, rateLimitResponse } from "@/lib/apiResponse";
 import { buildRejectionPostMortemPrompt } from "@/lib/ai/prompts";
+import { trackedAICall } from "@/lib/ai/trackedCall";
 
 export const maxDuration = 60;
 
@@ -65,23 +66,27 @@ export async function POST(req: Request) {
       return rateLimitResponse(rateLimit.message!);
     }
 
-    const { object: postMortem } = await generateObject({
-      model: anthropic("claude-haiku-4-5"),
-      schema: z.object({
-        likely_gap: z.string().min(10),
-        similar_profiles_action: z.string().min(10),
-        roadmap_update_suggestion: z.string().min(5),
-      }),
-      prompt: buildRejectionPostMortemPrompt(
-        app.job_title,
-        app.company ?? undefined,
-        jobAnalysis?.fit_score ?? null,
-        jobAnalysis?.matched_skills ?? [],
-        jobAnalysis?.missing_skills ?? [],
-        app.outcome_stage_reached,
-        app.outcome_reason ?? undefined
-      ),
-    });
+    const { object: postMortem } = await trackedAICall(
+      { route: "/api/applications/post-mortem", userId: user.id, model: "claude-haiku-4-5", aiFunction: "generateObject" },
+      () =>
+        generateObject({
+          model: anthropic("claude-haiku-4-5"),
+          schema: z.object({
+            likely_gap: z.string().min(10),
+            similar_profiles_action: z.string().min(10),
+            roadmap_update_suggestion: z.string().min(5),
+          }),
+          prompt: buildRejectionPostMortemPrompt(
+            app.job_title,
+            app.company ?? undefined,
+            jobAnalysis?.fit_score ?? null,
+            jobAnalysis?.matched_skills ?? [],
+            jobAnalysis?.missing_skills ?? [],
+            app.outcome_stage_reached,
+            app.outcome_reason ?? undefined
+          ),
+        })
+    );
 
     await consumeRateLimit(supabase, user.id, "/api/applications/post-mortem");
 
