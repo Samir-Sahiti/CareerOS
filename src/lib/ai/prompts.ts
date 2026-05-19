@@ -61,16 +61,17 @@ ${userHistory && userHistory.length >= 3
   ? `\n---\n\nCALIBRATION — This candidate's own outcome history (use to recalibrate your score):\n${userHistory.map((h) => `- Fit score ${h.fit_score_at_application} for "${h.job_title}"${h.company ? ` at ${h.company}` : ""} → furthest stage reached: ${h.outcome_stage_reached}${h.outcome_reason ? ` ("${h.outcome_reason}")` : ""}`).join("\n")}\n\nIf the historical data shows the AI was systematically over- or under-predicting (e.g. scores of 70+ that got no response), adjust this new score accordingly. Do not inflate or deflate beyond what the rubric bands justify.\n`
   : ""}
 Provide:
-1. fit_score (0–100 integer) — use the rubric above, do not inflate
-2. fit_score_basis: one of 'explicit' | 'inferred' | 'speculative'
+1. uncalibrated_fit_score (0–100 integer) — apply the rubric ONLY, ignoring any calibration examples above. This is what the rubric alone says, before adjusting for the candidate's historical outcomes.
+2. fit_score (0–100 integer) — the final score after applying both the rubric AND the calibration examples (if any). If no calibration examples were provided, fit_score MUST equal uncalibrated_fit_score.
+3. fit_score_basis: one of 'explicit' | 'inferred' | 'speculative'
    - 'explicit': the listing clearly states requirements and the candidate explicitly matches/misses them
    - 'inferred': seniority, scope, or key requirements had to be inferred from context (titles, company stage, etc.)
    - 'speculative': significant ambiguity in the listing or the candidate profile — score has lower confidence
-3. fit_score_rationale: 1–2 sentences explaining what the score is based on (e.g. "Matched 7/9 listed skills. Seniority inferred from years of experience — listing doesn't state level.")
-4. recommendation: 'apply' / 'maybe' / 'skip' — honest assessment
-5. recommendation_reason: 1–2 candid sentences
-6. cv_suggestions: 3–5 specific, actionable improvements (e.g. "Add Docker to skills — the role lists it as required")
-7. salary_estimate: an object with these exact fields:
+4. fit_score_rationale: 1–2 sentences explaining what the score is based on (e.g. "Matched 7/9 listed skills. Seniority inferred from years of experience — listing doesn't state level.")
+5. recommendation: 'apply' / 'maybe' / 'skip' — honest assessment
+6. recommendation_reason: 1–2 candid sentences
+7. cv_suggestions: 3–5 specific, actionable improvements (e.g. "Add Docker to skills — the role lists it as required")
+8. salary_estimate: an object with these exact fields:
    - shown_in_listing: true if the listing explicitly states a salary range or number, false otherwise
    - If shown_in_listing is true: extract currency, low, mid (midpoint), and high verbatim from the listing. Do not adjust or estimate — pass through what the listing says.
    - If shown_in_listing is false: set guidance to a 1–2 sentence message telling the candidate where to research comp for this role (e.g. Levels.fyi for tech, Glassdoor for broader; mention any salary-transparency laws that may apply based on location signals in the listing). Do NOT invent numbers.

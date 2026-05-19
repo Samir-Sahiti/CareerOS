@@ -26,7 +26,6 @@ export function CVUpload({ onCancel }: { onCancel?: () => void }) {
       }
 
       // 1. Upload file to Supabase Storage
-      const fileExt = file.name.split('.').pop();
       const fileName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
       const filePath = `${user.id}/${fileName}`;
       

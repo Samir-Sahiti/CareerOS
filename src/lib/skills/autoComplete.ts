@@ -7,9 +7,13 @@ import { logger } from "@/lib/logger";
  *
  * Returns the number of items auto-completed (0 if none or no skill_id links).
  * Idempotent: already-done items are not touched (status != 'done' filter).
+ *
+ * Explicit user_id scoping is required because this is called from the
+ * background CV parse pipeline using the admin client (RLS bypassed).
  */
 export async function autoCompleteRoadmapItems(
   cvId: string,
+  userId: string,
   supabase: SupabaseClient
 ): Promise<number> {
   try {
@@ -23,10 +27,12 @@ export async function autoCompleteRoadmapItems(
 
     const skillIds = cvSkills.map((r) => r.skill_id as string);
 
-    // Find skill-type roadmap items that match and aren't yet done
+    // Find skill-type roadmap items that match and aren't yet done.
+    // Scope explicitly to user_id since callers may use the admin client.
     const { data: matchingItems, error: itemsError } = await supabase
       .from("roadmap_items")
       .select("id")
+      .eq("user_id", userId)
       .eq("item_type", "skill")
       .neq("status", "done")
       .not("skill_id", "is", null)

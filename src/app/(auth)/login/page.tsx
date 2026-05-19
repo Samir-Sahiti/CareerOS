@@ -24,11 +24,9 @@ export default function LoginPage() {
   const router = useRouter();
   const supabase = createClient();
 
-  const [mode, setMode] = useState<"oauth" | "magic" | "password">("oauth");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState<string | null>(null);
-  const [magicSent, setMagicSent] = useState(false);
 
   const handleOAuth = async (provider: "google") => {
     setLoading(provider);
@@ -36,18 +34,6 @@ export default function LoginPage() {
       provider,
       options: { redirectTo: `${window.location.origin}/auth/callback` },
     });
-  };
-
-  const handleMagicLink = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading("magic");
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
-    });
-    setLoading(null);
-    if (error) { toast.error("Couldn't send link — check the email address."); return; }
-    setMagicSent(true);
   };
 
   const handlePassword = async (e: React.FormEvent) => {
@@ -72,7 +58,7 @@ export default function LoginPage() {
         </div>
 
         <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--card-bg)] p-7 space-y-5">
-          {/* OAuth buttons */}
+          {/* OAuth */}
           <button
             onClick={() => handleOAuth("google")}
             disabled={loading !== null}
@@ -88,96 +74,46 @@ export default function LoginPage() {
             <div className="flex-1 h-px bg-[var(--border-subtle)]" />
           </div>
 
-          {/* Magic link */}
-          {mode !== "password" && (
-            <>
-              {magicSent ? (
-                <div className="text-center py-4 space-y-2">
-                  <p className="text-sm font-medium text-white">Check your inbox</p>
-                  <p className="text-xs text-gray-400">We sent a sign-in link to <span className="text-white">{email}</span>.</p>
-                  <button onClick={() => { setMagicSent(false); setEmail(""); }} className="text-xs text-amber-400 hover:underline mt-2">
-                    Use a different email
-                  </button>
-                </div>
-              ) : (
-                <form onSubmit={handleMagicLink} className="space-y-3">
-                  <input
-                    type="email"
-                    required
-                    className="auth-input"
-                    placeholder="you@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
-                  <button
-                    type="submit"
-                    disabled={loading !== null}
-                    className="btn-primary w-full flex items-center justify-center gap-2"
-                  >
-                    {loading === "magic" ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                    Send sign-in link
-                  </button>
-                </form>
-              )}
-
-              <button
-                onClick={() => setMode("password")}
-                className="w-full text-center text-xs text-gray-500 hover:text-gray-300 transition-colors"
-              >
-                Use a password instead →
-              </button>
-            </>
-          )}
-
-          {/* Password fallback */}
-          {mode === "password" && (
-            <form onSubmit={handlePassword} className="space-y-4">
-              <div>
-                <label className="auth-label" htmlFor="email">Email</label>
-                <input
-                  id="email"
-                  type="email"
-                  required
-                  className="auth-input"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
+          {/* Password */}
+          <form onSubmit={handlePassword} className="space-y-4">
+            <div>
+              <label className="auth-label" htmlFor="email">Email</label>
+              <input
+                id="email"
+                type="email"
+                required
+                className="auth-input"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="auth-label" htmlFor="password">Password</label>
+                <Link href="/forgot-password" className="text-xs text-amber-400 hover:underline">
+                  Forgot password?
+                </Link>
               </div>
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="auth-label" htmlFor="password">Password</label>
-                  <Link href="/forgot-password" className="text-xs text-amber-400 hover:underline">
-                    Forgot password?
-                  </Link>
-                </div>
-                <input
-                  id="password"
-                  type="password"
-                  required
-                  className="auth-input"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={loading !== null}
-                className="btn-primary w-full flex items-center justify-center gap-2 mt-2"
-              >
-                {loading === "password" ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                Log In
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode("oauth")}
-                className="w-full text-center text-xs text-gray-500 hover:text-gray-300 transition-colors"
-              >
-                ← Back to sign-in options
-              </button>
-            </form>
-          )}
+              <input
+                id="password"
+                type="password"
+                required
+                className="auth-input"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading !== null}
+              className="btn-primary w-full flex items-center justify-center gap-2 mt-2"
+            >
+              {loading === "password" ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+              Log In
+            </button>
+          </form>
         </div>
 
         <p className="text-center text-sm text-gray-500">

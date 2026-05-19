@@ -68,6 +68,26 @@ h1, h2, h3, h4, h5, h6 {
 .delay-400 { animation-delay: 0.4s; }
 .delay-500 { animation-delay: 0.5s; }
 
+/* Highlight the element matching the current URL fragment (e.g. /resources#react).
+   Pulses on arrival to grab attention, then settles into a sustained amber
+   border and tint so the visitor can still see which card they came for.
+
+   Two selectors because Next.js client-side navigation doesn't always trigger
+   the native :target pseudo-class. TargetHighlighter.tsx applies the data
+   attribute as a fallback. */
+@keyframes targetPulse {
+  0%   { box-shadow: 0 0 0 0   rgba(245, 158, 11, 0.7);  background-color: rgba(245, 158, 11, 0.14); }
+  60%  { box-shadow: 0 0 0 18px rgba(245, 158, 11, 0);   background-color: rgba(245, 158, 11, 0.08); }
+  100% { box-shadow: 0 0 0 0   rgba(245, 158, 11, 0);    background-color: rgba(245, 158, 11, 0.08); }
+}
+
+.target-highlight:target,
+.target-highlight[data-target-active="true"] {
+  border-color: rgb(245, 158, 11) !important;
+  background-color: rgba(245, 158, 11, 0.08);
+  animation: targetPulse 1.4s ease-out 2;
+}
+
 /* ── Grain texture ───────────────────────────────────────────────────────────── */
 .grain-overlay {
   position: relative;

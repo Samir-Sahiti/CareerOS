@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { ClipboardList, ArrowRight, Plus } from "lucide-react";
 import { Application, ApplicationStatus } from "@/types";
-import { format } from "date-fns";
 
 interface ApplicationsWidgetProps {
   applications: Application[];

@@ -4,6 +4,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import { logger } from "@/lib/logger";
 import { errorResponse, successResponse } from "@/lib/apiResponse";
+import { trackedAICall } from "@/lib/ai/trackedCall";
 import { NextRequest } from "next/server";
 import { createHash } from "crypto";
 
@@ -52,19 +53,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { object } = await generateObject({
-      model: anthropic("claude-haiku-4-5"),
-      schema: z.object({
-        role_title: z.string(),
-        seniority_level: z.enum(["Junior", "Mid", "Senior", "Lead", "Principal"]),
-        role_family: z.string(),
-        top_required_skills: z.array(z.string()),
-        nice_to_have_skills: z.array(z.string()),
-        key_responsibilities: z.array(z.string()),
-        what_makes_a_strong_candidate: z.string(),
-        red_flags_to_watch: z.array(z.string()),
-      }),
-      prompt: `Parse this job listing and extract structured insights a job seeker would find useful.
+    const { object } = await trackedAICall(
+      { route: "/api/jobs/demo-analyze", userId: null, model: "claude-haiku-4-5", aiFunction: "generateObject" },
+      () =>
+        generateObject({
+          model: anthropic("claude-haiku-4-5"),
+          schema: z.object({
+            role_title: z.string(),
+            seniority_level: z.enum(["Junior", "Mid", "Senior", "Lead", "Principal"]),
+            role_family: z.string(),
+            top_required_skills: z.array(z.string()),
+            nice_to_have_skills: z.array(z.string()),
+            key_responsibilities: z.array(z.string()),
+            what_makes_a_strong_candidate: z.string(),
+            red_flags_to_watch: z.array(z.string()),
+          }),
+          prompt: `Parse this job listing and extract structured insights a job seeker would find useful.
 
 JOB LISTING:
 ${jobRawText}
@@ -78,7 +82,8 @@ Extract:
 - key_responsibilities: 3-4 core things this role actually does day-to-day
 - what_makes_a_strong_candidate: 1-2 sentences on what separates a 90th-percentile applicant
 - red_flags_to_watch: 1-3 things in the listing that might indicate role is worse than it sounds (vague scope, "wear many hats" without clarity, etc). Empty array if listing is clean.`,
-    });
+        })
+    );
 
     // Record rate limit after successful AI call
     await supabase.from("demo_rate_limits").insert({ ip_hash: ipHash });

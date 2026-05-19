@@ -64,6 +64,8 @@ export interface JobAnalysis {
   fit_score: number | null;
   fit_score_basis: FitScoreBasis | null;
   fit_score_rationale: string | null;
+  uncalibrated_fit_score: number | null;
+  calibration_history_size: number;
   recommendation: 'apply' | 'maybe' | 'skip' | null;
   recommendation_reason: string | null;
   matched_skills: string[];
@@ -109,6 +111,7 @@ export interface CareerRoadmap {
   user_id: string;
   current_role: string;
   paths: CareerPath[];
+  selected_path_idx: number | null;
   created_at: string;
 }
 
@@ -163,6 +166,7 @@ export interface TailoredCv {
   job_analysis_id: string;
   tailored_data: ParsedCvData;
   user_edits: Partial<ParsedCvData> | null;
+  version: number;
   created_at: string;
   updated_at: string;
 }
@@ -189,6 +193,7 @@ export interface RoadmapItem {
   completed_at: string | null;
   auto_completed_by_cv_id: string | null;
   skill_id: string | null; // SG-5: links to skills_taxonomy for auto-completion
+  path_idx: number | null; // Index into CareerRoadmap.paths[] this item belongs to
   created_at: string;
 }
 

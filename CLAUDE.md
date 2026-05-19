@@ -39,7 +39,6 @@ src/
 │   │                        #   interview/progress (T2-2)
 │   ├── api/
 │   │   ├── account/
-│   │   ├── analytics/cohort/        # T2-5: cohort benchmarking
 │   │   ├── applications/
 │   │   │   ├── [id]/
 │   │   │   ├── follow-up/
@@ -75,8 +74,7 @@ src/
 ├── lib/
 │   ├── supabase/
 │   │   ├── client.ts        # Browser client (createBrowserClient)
-│   │   ├── server.ts        # Server client + admin client (service role)
-│   │   └── middleware.ts    # Session refresh helper
+│   │   └── server.ts        # Server client + admin client (service role)
 │   ├── ai/
 │   │   └── prompts.ts       # All AI prompt builders (centralised)
 │   ├── skills/              # Skill taxonomy layer (SG-1 through SG-7)
@@ -118,7 +116,7 @@ Additional top-level paths:
 ### Auth
 `src/middleware.ts` refreshes sessions on every request. Redirects unauthenticated users away from dashboard routes and authenticated users away from auth routes. Dashboard layout double-checks with `getUser()`.
 
-Auth pages support: Google OAuth, GitHub OAuth, magic link (passwordless), and email/password (collapsed fallback). OAuth requires providers to be enabled in the Supabase dashboard. The callback at `src/app/auth/callback/route.ts` handles code exchange and redirects new users to `/onboarding/cv`.
+Auth pages support: Google OAuth and email/password. OAuth requires Google to be enabled in the Supabase dashboard. The callback at `src/app/auth/callback/route.ts` handles code exchange and redirects new users to `/onboarding/cv`.
 
 ### AI SDK Usage
 - **Structured output:** `generateObject()` with Zod schemas — CV parsing, job analysis, interview questions, career roadmaps, rejection post-mortems (T2-3), interview next-turn (T1-2)
@@ -144,7 +142,7 @@ The prompt also accepts an optional `userHistory: OutcomeHistoryItem[]` paramete
 
 ### Skill Taxonomy (SG-1 through SG-7)
 
-A normalized skill taxonomy replaces the ad-hoc `string[]` approach. This powers consistent fit scoring, roadmap auto-completion, and cohort comparisons.
+A normalized skill taxonomy replaces the ad-hoc `string[]` approach. This powers consistent fit scoring and roadmap auto-completion.
 
 **Taxonomy source of truth:** `data/skills-taxonomy.json` — committed to the repo, ships in PRs. Nine categories: `language`, `framework`, `database`, `cloud`, `devops`, `tool`, `concept`, `domain`, `soft`.
 
@@ -239,13 +237,13 @@ Cover Letter is also accessible as an inline CTA on the job detail page (`/jobs/
 
 ## Database
 
-PostgreSQL via Supabase. Twelve tables, all with Row-Level Security (except `cohort_stats` which is aggregate-only with no `user_id`):
+PostgreSQL via Supabase. All tables have Row-Level Security except `demo_rate_limits` (accessed only via admin client). The `cohort_stats` table exists in `schema.sql` but is reserved for when the platform has enough users to power benchmarks — currently not produced or read.
 
 | Table | Purpose |
 |-------|---------|
 | `profiles` | User metadata (auto-created via trigger on signup) |
 | `cvs` | Uploaded CVs with parsed text and structured data (JSONB) |
-| `job_analyses` | Job fit scores, confidence basis/rationale, skill matches, salary |
+| `job_analyses` | Job fit scores, confidence basis/rationale, skill matches, salary, calibration delta |
 | `interview_sessions` | Mock interview questions, answers, scores (JSONB) |
 | `career_roadmaps` | AI-generated career progression paths (JSONB) |
 | `roadmap_items` | Individual tracked skill/project items within a roadmap (T2-4) |
@@ -253,8 +251,8 @@ PostgreSQL via Supabase. Twelve tables, all with Row-Level Security (except `coh
 | `tailored_cvs` | Per-job AI-tailored CV versions with user edits |
 | `applications` | Application tracking with status enum + outcome fields |
 | `rate_limit_events` | Per-user AI request tracking |
+| `ai_call_events` | Per-call telemetry: latency, tokens, cost, success |
 | `demo_rate_limits` | IP-hash-based throttle for the unauthenticated landing demo |
-| `cohort_stats` | Weekly aggregate benchmarks by seniority × role family × experience |
 
 - **Storage bucket:** `cvs` (private, RLS scoped to `{user_id}/{filename}`)
 - **Enum:** `application_status` — `saved`, `applied`, `interviewing`, `offered`, `rejected`
@@ -286,9 +284,7 @@ Code has `|| "placeholder"` fallbacks to avoid build crashes, but the app won't 
 ## Known Gotchas
 
 - **PDF polyfills:** `src/lib/pdf/polyfills.ts` defines DOMMatrix/DOMPoint/DOMRect stubs for `pdfjs-dist` in Node.js. Called via `applyPdfPolyfills()` in the cv/parse route. Brittle across `pdfjs-dist` upgrades.
-- **Unused middleware helper:** `src/lib/supabase/middleware.ts` exports `updateSession()` but `src/middleware.ts` duplicates the logic inline instead of importing it.
 - **Server external packages:** `next.config.ts` lists `pdf-parse` and `pdfjs-dist` as `serverExternalPackages`.
 - **Schema is idempotent:** `schema.sql` uses `DROP POLICY IF EXISTS` before every `CREATE POLICY`, so it is safe to re-run on an existing database without errors.
-- **OAuth setup required:** Google and GitHub OAuth buttons are wired on the client side but require providers to be configured in the Supabase dashboard (Authentication → Providers) before they work.
-- **Cohort benchmarks need data:** The `cohort_stats` table is populated by a manual or scheduled aggregate job — it is not auto-populated by the app. Benchmarks only display when a cohort has ≥20 members.
+- **OAuth setup required:** Google OAuth requires the provider to be enabled in the Supabase dashboard (Authentication → Providers) before it works.
 - **`demo_rate_limits` has no RLS:** This table is accessed exclusively via the admin client (service role). Do not add RLS — it is intentionally bypassed for the unauthenticated demo route.

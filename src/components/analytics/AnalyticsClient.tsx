@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Application, JobAnalysis, InterviewSession } from "@/types";
-import { BarChart2, Briefcase, MessageSquare, TrendingUp, Users, ArrowRight } from "lucide-react";
+import { BarChart2, Briefcase, MessageSquare, TrendingUp, ArrowRight } from "lucide-react";
 
 interface Props {
   applications: Application[];
@@ -27,28 +26,7 @@ const STATUS_COLORS: Record<string, string> = {
   rejected: "bg-red-500",
 };
 
-interface CohortResponse {
-  cohort: { seniority_level: string; role_family: string; experience_bracket: string } | null;
-  stats: {
-    member_count: number;
-    avg_fit_score: number | null;
-    response_rate_pct: number | null;
-    offer_rate_pct: number | null;
-  } | null;
-  user_stats: { applied_count: number; response_rate: number | null; offer_rate: number | null };
-  insufficient_data: boolean;
-}
-
 export function AnalyticsClient({ applications, jobs, interviews }: Props) {
-  const [cohortData, setCohortData] = useState<CohortResponse | null>(null);
-
-  useEffect(() => {
-    fetch("/api/analytics/cohort")
-      .then((r) => r.json())
-      .then(setCohortData)
-      .catch(() => {});
-  }, []);
-
   // Application funnel
   const statusCounts = applications.reduce<Record<string, number>>((acc, app) => {
     acc[app.status] = (acc[app.status] ?? 0) + 1;
@@ -298,59 +276,6 @@ export function AnalyticsClient({ applications, jobs, interviews }: Props) {
         </div>
       )}
 
-      {/* T2-5: Cohort benchmarking */}
-      {cohortData && (
-        <div className="rounded-xl border border-white/5 bg-[var(--card-bg,#1a1916)] p-6">
-          <div className="flex items-center gap-2 mb-1">
-            <Users className="w-4 h-4 text-purple-400" />
-            <h2 className="font-semibold text-white">Benchmarks</h2>
-          </div>
-          {cohortData.cohort && (
-            <p className="text-xs text-gray-500 mb-4">
-              Your cohort: {cohortData.cohort.seniority_level} {cohortData.cohort.role_family} · {cohortData.cohort.experience_bracket} yrs experience
-            </p>
-          )}
-
-          {cohortData.insufficient_data ? (
-            <p className="text-sm text-gray-500">
-              Cohort benchmarks are shown once your peer group has enough members (≥20). Check back as the platform grows.
-            </p>
-          ) : cohortData.stats ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-              {cohortData.user_stats.response_rate != null && cohortData.stats.response_rate_pct != null && (
-                <div className="space-y-1">
-                  <p className="text-xs text-gray-500">Response rate</p>
-                  <p className="text-xl font-bold text-white">{cohortData.user_stats.response_rate}%</p>
-                  <p className="text-xs text-gray-600">Cohort avg: {Math.round(cohortData.stats.response_rate_pct)}%</p>
-                  {cohortData.user_stats.response_rate > cohortData.stats.response_rate_pct && (
-                    <p className="text-xs text-green-400">Above cohort avg</p>
-                  )}
-                  {cohortData.user_stats.response_rate < cohortData.stats.response_rate_pct && (
-                    <p className="text-xs text-amber-400">Below cohort avg</p>
-                  )}
-                </div>
-              )}
-              {cohortData.user_stats.offer_rate != null && cohortData.stats.offer_rate_pct != null && (
-                <div className="space-y-1">
-                  <p className="text-xs text-gray-500">Offer rate</p>
-                  <p className="text-xl font-bold text-white">{cohortData.user_stats.offer_rate}%</p>
-                  <p className="text-xs text-gray-600">Cohort avg: {Math.round(cohortData.stats.offer_rate_pct)}%</p>
-                </div>
-              )}
-              {cohortData.stats.avg_fit_score != null && (
-                <div className="space-y-1">
-                  <p className="text-xs text-gray-500">Cohort avg fit score</p>
-                  <p className="text-xl font-bold text-white">{Math.round(cohortData.stats.avg_fit_score)}</p>
-                  <p className="text-xs text-gray-600">{cohortData.stats.member_count} members</p>
-                </div>
-              )}
-            </div>
-          ) : null}
-          <p className="text-xs text-gray-600 mt-4">
-            Aggregate-only data. <Link href="/settings" className="text-amber-400 hover:text-amber-300 transition-colors">Opt out in Settings →</Link>
-          </p>
-        </div>
-      )}
     </div>
   );
 }

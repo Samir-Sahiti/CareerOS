@@ -73,7 +73,6 @@ async function main() {
 
   const BATCH_SIZE = 50;
   let inserted = 0;
-  let updated = 0;
   let failed = 0;
 
   for (let i = 0; i < taxonomy.skills.length; i += BATCH_SIZE) {

@@ -90,34 +90,110 @@ E kam zgjedhur flow-n që mbulon **vlerën më të madhe në kohën më të shku
 
 ## 3. Pjesët teknike që do të shpjegoj shkurt
 
-Do të mbaj shpjegimet teknike në **3 pikat ku ka vlerë të vërtetë inxhinierike**, jo në çdo file. Audienca e humb fokusin shpejt nëse zhytemi në strukturë folderash.
+Do të mbaj shpjegimet teknike në **pikat ku ka vlerë të vërtetë inxhinierike**, jo në çdo file. Audienca e humb fokusin shpejt nëse zhytemi në strukturë folderash — por nëse pyetet, kam përgjigje konkrete për çdo zgjedhje.
 
-**a) Stack-u — një rresht:** "Next.js 16 App Router, React 19, Supabase për DB + Auth + Storage, Vercel AI SDK me Anthropic Claude Haiku, Tailwind v4."
+### a) Stack-u dhe arsyeja e secilës zgjedhje
 
-**b) Si funksionon kalibrimi (core differentiator-i im):**
+| Shtresë | Tech | Pse pikërisht kjo |
+|---|---|---|
+| Framework | **Next.js 16 (App Router)** + React 19 | Server Components më lejojnë të bëj DB queries direkt në server pa shtresë API për leximet, ndërsa API routes e mbajnë AI-n në server (kurrë në klient — `ANTHROPIC_API_KEY` është server-only). Routing-u file-based mapon 1:1 me 7 features-at e platformës: `(dashboard)/cv`, `(dashboard)/jobs`, etj. Route groups më lejojnë të ndaj `(auth)` nga `(dashboard)` me layout-e të ndara pa ndryshuar URL-të. |
+| Runtime | **Node.js (jo Edge)** | `pdf-parse` dhe `pdfjs-dist` kanë nevojë për Node API — ndaj çdo route AI ka `export const maxDuration = 60` dhe `next.config.ts` lista `pdf-parse` + `pdfjs-dist` te `serverExternalPackages`. |
+| DB + Auth + Storage | **Supabase** | Një vendor për të treja → më pak surface për të menaxhuar. Postgres me RLS native do të thotë që policies janë në DB layer, jo në kod aplikacioni — më e vështirë me e bypass-uar aksidentalisht. Storage për CV PDF-të me path-scoped RLS (`{user_id}/{filename}`). |
+| AI | **Vercel AI SDK + Anthropic Claude Haiku 4.5** | AI SDK ofron një abstraksion të vetëm për `generateText`/`generateObject`/`streamObject` — model-agnostic nëse na duhet të ndërrojmë. Haiku është mjaft i shpejtë për UX të mirë (job analysis ~3–5s) dhe shumë më i lirë se Sonnet/Opus, që ka rëndësi kur çdo user mund të bëjë 10 calls/orë. |
+| Validim | **Zod** | Ka rol të dyfishtë (shih (c) më poshtë). |
+| Data fetching | **TanStack React Query** | Cache + invalidation deklarativ (p.sh., kur bëhet `outcome capture`, invalidoj `["analytics"]` dhe widget-et i marrin data-t e reja vetë). Më mirë sesa state manual + useEffect. |
+| Styling | **Tailwind v4** (`@tailwindcss/postcss`) | v4 punon me CSS variables nativisht, ndaj theme switching (dark/light) bëhet duke override-uar variables në `:root` vs `.light`, jo duke duplikuar klasa. Më poshtë te (e) shpjegoj sistemin e tokens. |
+| Theming | **next-themes** me `attribute="class"` | Server-render-safe, pa flash të dark→light në load. |
+
+### b) Arkitektura e auth-it: 3 lloje Supabase clients
+
+Kjo është e zakonshme me e ngatërruar. Kemi **tre** kliente, secili me një rol të qartë:
+
+1. **Browser client** (`createBrowserClient`) — për Client Components. Përdor anon key, RLS aktive.
+2. **Server client** (`createServerClient` me cookie forwarding) — për Server Components dhe API routes. Lexon cookies të requestit, mban session-in e përdoruesit, RLS aktive.
+3. **Admin client** (service role key) — bypass-on RLS. Përdoret **vetëm** për: storage operations (upload/download CV), CV parsing pipeline, dhe demo route i palogazhuar. Ky kurrë në klient.
+
+`src/middleware.ts` ekzekutohet në çdo request dhe refresh-on session-in (Supabase tokens kanë short TTL). Dashboard layout bën dy-fish check me `getUser()` për t'u siguruar — nëse middleware-i rri, layout-i ende mbron.
+
+### c) Çfarë është Zod dhe pse përdoret në dy vende të ndryshme
+
+Zod është një runtime schema validator për TypeScript. Pse runtime? — sepse compile-time types nuk e ndalin një user me ngjit JSON të shkatërruar te API. Përdoret në dy role krejt të ndarë:
+
+**Roli 1 — validim i request bodies (`src/lib/validation/schemas.ts`):**
+```ts
+const result = JobAnalyzeSchema.safeParse(body);
+if (!result.success) return errorResponse(result.error.errors[0].message, 400);
+```
+Çdo API route validon bodyin para se të bëjë çfarëdo. Mbron nga: missing fields, type mismatches, string lengths jashtë rangut, URLs invalide. Mesazhi i parë i errorit kthehet te user-i.
+
+**Roli 2 — schema për AI structured output (`generateObject` / `streamObject`):**
+```ts
+const { object } = await generateObject({
+  model: anthropic("claude-haiku-4-5"),
+  schema: JobAnalysisSchema,  // i njëjti format Zod
+  prompt: buildJobAnalysisPrompt(...)
+});
+```
+AI SDK e konverton schema-n në JSON Schema, e dërgon te Claude si tool call constraint, dhe Claude **garantohet** të kthejë output që match-on schema-n. Nëse nuk match-on, SDK retry-on automatikisht. Kjo eliminon "AI kthen markdown ose JSON të dëmtuar" si klasë e tërë problemi.
+
+Versioni fillestar i interview feedback-ut i parsuar markdown-in me `[SCORE: 85]` regex — i brishtë. Sot është një `streamObject` me `InterviewFeedbackSchema`, dhe UI render-on objektin pjesë-pjesë ndërsa streamohet (strengths si listë, STAR si checkboxe).
+
+### d) Si funksionon kalibrimi (core differentiator-i im)
+
 - Kur përdoruesi ka ≥3 outcome të kapura, marr 10 nga aplikimet e fundit (5 pozitive, 5 rejections).
 - I injektoj në prompt si few-shot examples përpara rubrikës.
 - Modeli sheh: "ky kandidat mori 70 dhe nuk u përgjigj askush" → e di që duhet të jetë më i rreptë.
-- Rubrika ka banda fikse të dokumentuara — model-i nuk mund të dalë jashtë tyre pa arsye të qartë.
+- Rubrika ka **banda fikse të dokumentuara** (90–100, 75–89, 60–74, 40–59, 20–39, 0–19) — modeli nuk mund të dalë jashtë tyre pa arsye të qartë, dhe i lejohet vetëm ±5 për nuancë brenda bandit.
 - Kjo është në `buildJobAnalysisPrompt` te `src/lib/ai/prompts.ts`.
 
-**c) Pse `streamObject` jo `streamText` për feedback-un e intervistës:**
-- Versioni fillestar nxirrte feedback si markdown me `[SCORE: 85]` parsuar me regex — i brishtë.
-- Tani përdor `streamObject` me Zod schema (`InterviewFeedbackSchema`).
-- UI render-on direkt strengths/improvements si lista, STAR si 4 checkbox për behavioral.
-- Ky është një case ku validimi schema-tik është dukshëm më i mirë se prompting për format.
+**Skill ground truth (SG-6):** Matched/missing skills nuk i prodhon Claude. Janë llogaritje **deterministe** mbi skill taxonomy-n: `matched = listing_skills ∩ cv_skills`, `missing = listing_skills − cv_skills`. Claude prodhon vetëm fushat cilësore (rationale, suggestions, salary). Kjo do të thotë që dy users me të njëjtin CV dhe të njëjtën listing marrin të njëjtin matched/missing list — pa AI variance.
 
-**d) Rate limiting fails CLOSED:**
-- Two-tier: global 10/orë, plus per-route caps (cv/parse 3/h, cover-letter 5/h, etj.).
-- Nëse DB jep error gjatë check-ut → mohojmë requestin, jo lejojmë.
-- Ka rëndësi sepse çdo request AI kushton para reale dhe një bug në rate limiter mund t'i hapë derën abuse-it.
+### e) Skill Taxonomy: pse normalizer deterministik
 
-**e) Demo i palogazhuar:**
-- Tabela e veçantë `demo_rate_limits` me hash SHA-256 të IP-së (kurrë IP raw).
-- Pa RLS — qëllimisht — sepse aksesohet vetëm via admin client (service role).
-- 1 për IP në ditë.
+Versioni fillestar trajtonte skills si `string[]` ad-hoc. Problemi: "React.js", "ReactJS", "react" dhe "React" trajtohen si 4 skills të ndryshme. Që fit score të jetë i krahasueshëm nëpër users, na duhej një burim i vetëm i së vërtetës.
 
-**Çka NUK do ta hap:** RLS policies file-by-file, struktura e plotë e folderave, çdo Zod schema. Janë në kod nëse pyet dikush.
+- `data/skills-taxonomy.json` — checked into repo, ships in PRs (treated as code).
+- 9 kategori: language, framework, database, cloud, devops, tool, concept, domain, soft.
+- 3-tier lookup në `src/lib/skills/normalizer.ts`:
+  1. Exact match në `canonical_name` (case-insensitive)
+  2. Match në çfarëdo `alias`
+  3. Normalized match (strip punctuation, lowercase): `"react.js"` → `"reactjs"`
+- O(1) lookup via in-memory Map, 10-min cache TTL.
+- Skills të panjohura logohen në `unknown_skills`. Loop javor: `npm run review:unknowns` → edit JSON → `npm run seed:taxonomy`.
+
+### f) Theming: design tokens, jo hex hardcoded
+
+Tema dark/light punon me CSS variables, jo me Tailwind dark variant. `globals.css` ka:
+```css
+:root { --background: #0f0e0c; --accent: #f59e0b; ... }
+.light { --background: #faf9f7; --accent: #d97706; ... }
+```
+Komponentët përdorin `bg-[var(--card-bg)]`, kurrë `bg-stone-900`. Sidebar-i mban dark edhe në light mode (qëllimisht — kontrasti më i mirë për navigim).
+
+**Një rregull konkret accessibility:** `bg-amber-500` butona duhet të kenë `text-stone-900`, kurrë `text-white` — `#f59e0b` mbi white nuk kalon WCAG AA.
+
+### g) Rate limiting fails CLOSED
+
+- Two-tier: global 10/orë per user, plus per-route caps (`cv/parse` 3/h, `cover-letter/generate` 5/h, `cv/tailor` 2/h, etj.).
+- Tracking në `rate_limit_events` table (rolling window, jo bucket fix).
+- Check para AI call → AI call → consume pas success-it (ndryshe nga "consume first" që do të penalizonte fail-et e DB-së).
+- **Nëse DB jep error gjatë check-ut → mohojmë requestin.** Kjo është e qëllimtë. Çdo AI call kushton para reale; një bug që "fails open" do të hapte derën për abuse.
+- Returns HTTP 429 me `Retry-After: 3600`.
+
+### h) Demo i palogazhuar (landing demo)
+
+- Tabela e veçantë `demo_rate_limits` me hash SHA-256 të IP-së (kurrë IP raw — privacy by design).
+- Pa RLS — qëllimisht — sepse aksesohet vetëm via admin client. Komenti në `schema.sql` e dokumenton këtë.
+- 1 për IP në ditë. Hashi parandalon enumeration nëse dikush sheh DB-në.
+
+### i) PDF parsing pipeline (gotcha që e zgjidha)
+
+- `pdf-parse` për tekst të thjeshtë; `pdfjs-dist` si fallback për layouts kompleks.
+- `pdfjs-dist` pret DOM API (DOMMatrix, DOMPoint, DOMRect) që nuk ekzistojnë në Node.
+- Fix: stubs në `src/lib/pdf/polyfills.ts`, thirrur via `applyPdfPolyfills()` në fillim të `cv/parse` route-it.
+- I brishtë gjatë upgrades të `pdfjs-dist` — kam koment në kod me arsyen.
+
+**Çka NUK do ta hap pa u pyetur:** RLS policies file-by-file, struktura e plotë e folderave, çdo Zod schema. Janë në kod, dhe `CLAUDE.md` është dokumentacioni autoritativ nëse vlerësuesit duan të lexojnë vetë.
 
 ---
 

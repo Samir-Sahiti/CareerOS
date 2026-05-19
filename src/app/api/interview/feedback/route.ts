@@ -7,6 +7,7 @@ import { interviewFeedbackSchema, InterviewFeedbackOutputSchema } from "@/lib/va
 import { buildInterviewFeedbackSystem } from "@/lib/ai/prompts";
 import { logger } from "@/lib/logger";
 import { errorResponse, rateLimitResponse } from "@/lib/apiResponse";
+import { trackStreamUsage } from "@/lib/ai/trackedCall";
 
 export const maxDuration = 60;
 
@@ -56,6 +57,7 @@ export async function POST(req: Request) {
 
     const systemMessage = buildInterviewFeedbackSystem(parsedCv, question, type, jobTitle, company);
 
+    const streamStartedAt = Date.now();
     const result = streamObject({
       model: anthropic("claude-haiku-4-5"),
       schema: InterviewFeedbackOutputSchema,
@@ -64,6 +66,12 @@ export async function POST(req: Request) {
         { role: "user", content: prompt },
       ],
     });
+
+    trackStreamUsage(
+      { route: "/api/interview/feedback", userId: user.id, model: "claude-haiku-4-5", aiFunction: "streamObject" },
+      result.usage,
+      streamStartedAt
+    );
 
     return result.toTextStreamResponse();
   } catch (error: unknown) {

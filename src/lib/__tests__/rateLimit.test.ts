@@ -7,9 +7,7 @@ function makeSupabase(events: { route: string }[] | null, error: unknown = null)
     from: () => ({
       select: () => ({
         eq: () => ({
-          eq: () => ({
-            gte: () => Promise.resolve({ data: events, error }),
-          }),
+          gte: () => Promise.resolve({ data: events, error }),
         }),
       }),
     }),

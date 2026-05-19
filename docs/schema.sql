@@ -64,28 +64,34 @@ CREATE TABLE IF NOT EXISTS cvs (
 -- One row per job-listing analysis. Stores raw listing + AI results.
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS job_analyses (
-  id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id               UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  cv_id                 UUID        REFERENCES cvs(id) ON DELETE SET NULL,
-  job_title             TEXT        NOT NULL,
-  company               TEXT,
-  job_raw_text          TEXT        NOT NULL,
-  fit_score             INTEGER     CHECK (fit_score >= 0 AND fit_score <= 100),
-  fit_score_basis       TEXT        CHECK (fit_score_basis IN ('explicit', 'inferred', 'speculative')),
-  fit_score_rationale   TEXT,
-  recommendation        TEXT        CHECK (recommendation IN ('apply', 'maybe', 'skip')),
-  recommendation_reason TEXT,
-  matched_skills        TEXT[]      NOT NULL DEFAULT '{}',
-  missing_skills        TEXT[]      NOT NULL DEFAULT '{}',
-  cv_suggestions        TEXT[]      NOT NULL DEFAULT '{}',
-  salary_estimate       JSONB,
+  id                         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id                    UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  cv_id                      UUID        REFERENCES cvs(id) ON DELETE SET NULL,
+  job_title                  TEXT        NOT NULL,
+  company                    TEXT,
+  job_raw_text               TEXT        NOT NULL,
+  fit_score                  INTEGER     CHECK (fit_score >= 0 AND fit_score <= 100),
+  fit_score_basis            TEXT        CHECK (fit_score_basis IN ('explicit', 'inferred', 'speculative')),
+  fit_score_rationale        TEXT,
+  -- Score produced by the rubric WITHOUT calibration examples. Equal to fit_score
+  -- when the user has fewer than 3 historical outcomes. Used to expose the calibration delta.
+  uncalibrated_fit_score     INTEGER     CHECK (uncalibrated_fit_score >= 0 AND uncalibrated_fit_score <= 100),
+  calibration_history_size   INTEGER     NOT NULL DEFAULT 0,
+  recommendation             TEXT        CHECK (recommendation IN ('apply', 'maybe', 'skip')),
+  recommendation_reason      TEXT,
+  matched_skills             TEXT[]      NOT NULL DEFAULT '{}',
+  missing_skills             TEXT[]      NOT NULL DEFAULT '{}',
+  cv_suggestions             TEXT[]      NOT NULL DEFAULT '{}',
+  salary_estimate            JSONB,
   -- JSONB shape: { shown_in_listing, currency?, low?, mid?, high?, guidance?, negotiation_tip }
-  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Idempotent migrations for existing databases
-ALTER TABLE job_analyses ADD COLUMN IF NOT EXISTS fit_score_basis     TEXT CHECK (fit_score_basis IN ('explicit', 'inferred', 'speculative'));
-ALTER TABLE job_analyses ADD COLUMN IF NOT EXISTS fit_score_rationale TEXT;
+ALTER TABLE job_analyses ADD COLUMN IF NOT EXISTS fit_score_basis          TEXT CHECK (fit_score_basis IN ('explicit', 'inferred', 'speculative'));
+ALTER TABLE job_analyses ADD COLUMN IF NOT EXISTS fit_score_rationale      TEXT;
+ALTER TABLE job_analyses ADD COLUMN IF NOT EXISTS uncalibrated_fit_score   INTEGER CHECK (uncalibrated_fit_score >= 0 AND uncalibrated_fit_score <= 100);
+ALTER TABLE job_analyses ADD COLUMN IF NOT EXISTS calibration_history_size INTEGER NOT NULL DEFAULT 0;
 
 -- -----------------------------------------------------------------------------
 -- interview_sessions
@@ -107,14 +113,19 @@ CREATE TABLE IF NOT EXISTS interview_sessions (
 -- AI-generated career progression paths for the user's active CV.
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS career_roadmaps (
-  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id      UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  "current_role" TEXT      NOT NULL,
-  paths        JSONB       NOT NULL DEFAULT '[]',
+  id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id             UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  "current_role"      TEXT        NOT NULL,
+  paths               JSONB       NOT NULL DEFAULT '[]',
   -- JSONB shape: [{ path_title, next_role, timeline_estimate,
   --                 missing_skills[], recommended_projects[], experience_needed }]
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  -- Index into paths[] of the path the user has committed to focus on.
+  -- NULL means "no choice yet" — UI prompts the user to pick one.
+  selected_path_idx   INTEGER,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE career_roadmaps ADD COLUMN IF NOT EXISTS selected_path_idx INTEGER;
 
 -- -----------------------------------------------------------------------------
 -- cover_letters
@@ -139,6 +150,7 @@ CREATE TABLE IF NOT EXISTS applications (
   user_id          UUID               NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   job_analysis_id  UUID               REFERENCES job_analyses(id) ON DELETE SET NULL,
   cover_letter_id  UUID               REFERENCES cover_letters(id) ON DELETE SET NULL,
+  tailored_cv_id   UUID               REFERENCES tailored_cvs(id) ON DELETE SET NULL,
   job_title        TEXT               NOT NULL,
   company          TEXT,
   job_url          TEXT,
@@ -161,6 +173,7 @@ ALTER TABLE applications ADD COLUMN IF NOT EXISTS outcome_fit_score_at_apply  IN
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS outcome_captured_at         TIMESTAMPTZ;
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS follow_up_sent_at           TIMESTAMPTZ;
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS follow_up_draft             TEXT;
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS tailored_cv_id              UUID REFERENCES tailored_cvs(id) ON DELETE SET NULL;
 
 -- -----------------------------------------------------------------------------
 -- tailored_cvs
@@ -173,9 +186,14 @@ CREATE TABLE IF NOT EXISTS tailored_cvs (
   job_analysis_id  UUID        NOT NULL REFERENCES job_analyses(id) ON DELETE CASCADE,
   tailored_data    JSONB       NOT NULL,
   user_edits       JSONB,
+  version          INTEGER     NOT NULL DEFAULT 1,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE tailored_cvs ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+CREATE INDEX IF NOT EXISTS idx_tailored_cvs_job_version
+  ON tailored_cvs(job_analysis_id, version DESC);
 
 -- -----------------------------------------------------------------------------
 -- skills_taxonomy
@@ -294,8 +312,13 @@ CREATE TABLE IF NOT EXISTS roadmap_items (
   completed_at          TIMESTAMPTZ,
   auto_completed_by_cv_id UUID      REFERENCES cvs(id) ON DELETE SET NULL,
   skill_id              UUID        REFERENCES skills_taxonomy(id) ON DELETE SET NULL,  -- SG-5
+  -- Index into career_roadmaps.paths[] of the path this item belongs to.
+  -- Nullable for legacy rows generated before per-path tracking existed.
+  path_idx              INTEGER,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS path_idx INTEGER;
 
 -- Idempotent migration: add skill_id to existing roadmap_items rows
 ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS skill_id UUID REFERENCES skills_taxonomy(id) ON DELETE SET NULL;
@@ -348,6 +371,31 @@ CREATE TABLE IF NOT EXISTS rate_limit_events (
 
 CREATE INDEX IF NOT EXISTS idx_rate_limit_events_user_time
   ON rate_limit_events(user_id, created_at);
+
+-- -----------------------------------------------------------------------------
+-- ai_call_events
+-- Per-call telemetry for every Claude invocation: latency, tokens, cost, success.
+-- Inserted via admin client (best-effort); never blocks the main call path.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_call_events (
+  id                  UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id             UUID         REFERENCES auth.users(id) ON DELETE SET NULL,
+  route               TEXT         NOT NULL,
+  model               TEXT         NOT NULL,
+  ai_function         TEXT         NOT NULL,  -- 'generateObject' | 'generateText' | 'streamObject'
+  duration_ms         INTEGER      NOT NULL,
+  input_tokens        INTEGER,
+  output_tokens       INTEGER,
+  estimated_cost_usd  NUMERIC(10,6),
+  success             BOOLEAN      NOT NULL,
+  error_message       TEXT,
+  created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_call_events_user_time
+  ON ai_call_events(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_call_events_route_time
+  ON ai_call_events(route, created_at DESC);
 
 
 -- =============================================================================
@@ -444,6 +492,7 @@ ALTER TABLE cover_letters      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE applications       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE rate_limit_events  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE roadmap_items      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ai_call_events     ENABLE ROW LEVEL SECURITY;
 -- cohort_stats is read-only aggregate data — no RLS needed (no user_id column)
 
 -- tailored_cvs
@@ -510,6 +559,12 @@ CREATE POLICY "Users can only access their own data"
   ON roadmap_items FOR ALL
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
+
+-- ai_call_events — users can read their own; inserts only via admin client
+DROP POLICY IF EXISTS "Users can read their own ai call events" ON ai_call_events;
+CREATE POLICY "Users can read their own ai call events"
+  ON ai_call_events FOR SELECT
+  USING (auth.uid() = user_id);
 
 
 -- =============================================================================

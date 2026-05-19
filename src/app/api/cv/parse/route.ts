@@ -4,6 +4,7 @@ import { generateObject } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import mammoth from "mammoth";
+import { after } from "next/server";
 import { applyPdfPolyfills } from "@/lib/pdf/polyfills";
 import { parseCvSchema } from "@/lib/validation/schemas";
 import { buildCvParsePrompt } from "@/lib/ai/prompts";
@@ -11,6 +12,7 @@ import { logger } from "@/lib/logger";
 import { errorResponse, successResponse, rateLimitResponse } from "@/lib/apiResponse";
 import { getTaxonomyIndex, normalizeSkills, logUnknownSkills } from "@/lib/skills";
 import { autoCompleteRoadmapItems } from "@/lib/skills/autoComplete";
+import { trackedAICall } from "@/lib/ai/trackedCall";
 
 export const maxDuration = 60;
 
@@ -47,7 +49,6 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
   for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
     const page = await pdfDoc.getPage(pageNum);
     const content = await page.getTextContent();
-    // TextItem has `str`; TextMarkedContent does not — check before accessing
     const pageText = content.items
       .map((item) => ("str" in item ? (item as { str: string }).str : ""))
       .join(" ")
@@ -69,11 +70,11 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
 
 // ---------------------------------------------------------------------------
 // POST /api/cv/parse
+// Validates the request synchronously, marks parse_status='queued', returns 202.
+// All heavy work (download, extract, Claude, skill normalize) runs in after()
+// so the client gets an immediate response and polls cvs.parse_status for state.
 // ---------------------------------------------------------------------------
 export async function POST(req: Request) {
-  let innerCvId: string | null = null;
-  let adminClient: ReturnType<typeof createAdminClient> | null = null;
-
   try {
     let body: unknown;
     try {
@@ -88,7 +89,6 @@ export async function POST(req: Request) {
     }
 
     const { cvId } = parsed.data;
-    innerCvId = cvId;
 
     const supabase = await createClient();
 
@@ -97,7 +97,9 @@ export async function POST(req: Request) {
       return errorResponse("Unauthorized", 401);
     }
 
-    const rateLimit = await checkRateLimit(supabase, user.id, "/api/cv/parse");
+    const userId = user.id;
+
+    const rateLimit = await checkRateLimit(supabase, userId, "/api/cv/parse");
     if (!rateLimit.allowed) {
       return rateLimitResponse(rateLimit.message!);
     }
@@ -106,33 +108,65 @@ export async function POST(req: Request) {
       .from("cvs")
       .select("file_path, file_name")
       .eq("id", cvId)
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .single();
 
     if (cvError || !cvData) {
       return errorResponse("CV not found or unauthorized", 404);
     }
 
-    const { file_path, file_name } = cvData;
-
-    adminClient = createAdminClient();
-
+    const adminClient = createAdminClient();
     await adminClient
       .from("cvs")
-      .update({ parse_status: "pending", parse_error: null })
+      .update({ parse_status: "queued", parse_error: null })
       .eq("id", cvId);
 
-    const { data: fileBlob, error: downloadError } = await adminClient.storage
+    // Detach the heavy work — runs after the response is sent.
+    after(async () => {
+      await processParse({
+        cvId,
+        userId,
+        filePath: cvData.file_path,
+        fileName: cvData.file_name,
+      });
+    });
+
+    return successResponse({ accepted: true, cv_id: cvId, parse_status: "queued" }, 202);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Internal server error";
+    logger.error("CV parse enqueue error", { route: "/api/cv/parse" }, error);
+    return errorResponse(message, 500);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Background processor — runs inside next/server after().
+// Uses admin client throughout (no cookies post-response). Updates parse_status
+// at each stage so the client can render progress.
+// ---------------------------------------------------------------------------
+async function processParse(args: {
+  cvId: string;
+  userId: string;
+  filePath: string;
+  fileName: string;
+}) {
+  const { cvId, userId, filePath, fileName } = args;
+  const admin = createAdminClient();
+
+  try {
+    await admin.from("cvs").update({ parse_status: "extracting" }).eq("id", cvId);
+
+    const { data: fileBlob, error: downloadError } = await admin.storage
       .from("cvs")
-      .download(file_path);
+      .download(filePath);
 
     if (downloadError || !fileBlob) {
-      await markFailed(adminClient, cvId, "Failed to download CV from storage");
-      return errorResponse("Failed to download CV file", 500);
+      await markFailed(admin, cvId, "Failed to download CV from storage");
+      return;
     }
 
     const buffer = Buffer.from(await fileBlob.arrayBuffer());
-    const fileExt = file_name.split(".").pop()?.toLowerCase();
+    const fileExt = fileName.split(".").pop()?.toLowerCase();
     let extractedText = "";
 
     if (fileExt === "pdf") {
@@ -141,62 +175,59 @@ export async function POST(req: Request) {
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : "Unknown error";
         logger.error("PDF extraction error", { route: "/api/cv/parse", cvId }, error);
-        await markFailed(adminClient, cvId, `PDF Extraction failed: ${message}`);
-        return errorResponse(
-          "Could not read this PDF. It might be encrypted or corrupted.",
-          500
-        );
+        await markFailed(admin, cvId, `PDF Extraction failed: ${message}`);
+        return;
       }
     } else if (fileExt === "docx") {
       const result = await mammoth.extractRawText({ buffer });
       extractedText = result.value;
     } else if (fileExt === "doc") {
-      await markFailed(adminClient, cvId, "Legacy .doc format is not supported for AI analysis.");
-      return errorResponse(
-        "Legacy Word (.doc) files are not supported. Please save as .docx or .pdf and try again.",
-        400
-      );
+      await markFailed(admin, cvId, "Legacy .doc format is not supported for AI analysis.");
+      return;
     } else {
-      await markFailed(adminClient, cvId, `Unsupported file type: .${fileExt}`);
-      return errorResponse(
-        `Unsupported file type (.${fileExt}). Only PDF and DOCX are currently supported for AI analysis.`,
-        400
-      );
+      await markFailed(admin, cvId, `Unsupported file type: .${fileExt}`);
+      return;
     }
 
     if (!extractedText.trim()) {
-      await markFailed(adminClient, cvId, "No readable text could be extracted from this file");
-      return errorResponse("No text could be extracted from the file", 400);
+      await markFailed(admin, cvId, "No readable text could be extracted from this file");
+      return;
     }
 
-    const { object } = await generateObject({
-      model: anthropic("claude-haiku-4-5"),
-      schema: z.object({
-        current_role: z.string(),
-        seniority_level: z.enum(["Junior", "Mid", "Senior", "Lead", "Principal"]),
-        years_of_experience: z.number(),
-        skills: z.array(z.string()),
-        education: z.array(
-          z.object({
-            degree: z.string(),
-            institution: z.string(),
-            year: z.number().optional(),
-          })
-        ),
-        experience: z.array(
-          z.object({
-            title: z.string(),
-            company: z.string(),
-            duration: z.string(),
-            summary: z.string(),
-          })
-        ),
-        achievements: z.array(z.string()),
-      }),
-      prompt: buildCvParsePrompt(extractedText),
-    });
+    await admin.from("cvs").update({ parse_status: "analyzing" }).eq("id", cvId);
 
-    const { error: updateError } = await adminClient
+    const { object } = await trackedAICall(
+      { route: "/api/cv/parse", userId, model: "claude-haiku-4-5", aiFunction: "generateObject" },
+      () =>
+        generateObject({
+          model: anthropic("claude-haiku-4-5"),
+          schema: z.object({
+            current_role: z.string(),
+            seniority_level: z.enum(["Junior", "Mid", "Senior", "Lead", "Principal"]),
+            years_of_experience: z.number(),
+            skills: z.array(z.string()),
+            education: z.array(
+              z.object({
+                degree: z.string(),
+                institution: z.string(),
+                year: z.number().optional(),
+              })
+            ),
+            experience: z.array(
+              z.object({
+                title: z.string(),
+                company: z.string(),
+                duration: z.string(),
+                summary: z.string(),
+              })
+            ),
+            achievements: z.array(z.string()),
+          }),
+          prompt: buildCvParsePrompt(extractedText),
+        })
+    );
+
+    const { error: updateError } = await admin
       .from("cvs")
       .update({
         parsed_text: extractedText,
@@ -207,14 +238,13 @@ export async function POST(req: Request) {
       .eq("id", cvId);
 
     if (updateError) {
-      await markFailed(adminClient, cvId, "Failed to save parsed CV data");
-      return errorResponse("Failed to update CV with parsed data", 500);
+      await markFailed(admin, cvId, "Failed to save parsed CV data");
+      return;
     }
 
-    await consumeRateLimit(supabase, user.id, "/api/cv/parse");
+    await consumeRateLimit(admin, userId, "/api/cv/parse");
 
-    // SG-3: Normalize and persist skill links
-    let autoCompletedCount = 0;
+    // SG-3: Normalize and persist skill links (non-critical)
     try {
       const taxonomy = await getTaxonomyIndex();
       const results = normalizeSkills(object.skills, taxonomy);
@@ -222,15 +252,10 @@ export async function POST(req: Request) {
       const matched = results.filter((r) => r.canonical !== null);
       const unknown = results.filter((r) => r.canonical === null);
 
-      console.log(
-        `CV ${cvId} — normalized ${matched.length}/${results.length} skills (${unknown.length} unknown)`
-      );
-
       if (matched.length > 0) {
-        // Delete existing links before inserting (idempotent re-parse)
-        await adminClient.from("cv_skills").delete().eq("cv_id", cvId);
+        await admin.from("cv_skills").delete().eq("cv_id", cvId);
 
-        const { error: skillsError } = await adminClient.from("cv_skills").insert(
+        const { error: skillsError } = await admin.from("cv_skills").insert(
           matched.map((r) => ({
             cv_id: cvId,
             skill_id: r.canonical!.id,
@@ -244,30 +269,19 @@ export async function POST(req: Request) {
         }
       }
 
-      // SG-7: Log unknown skills for taxonomy maintenance
       if (unknown.length > 0) {
         await logUnknownSkills(unknown.map((r) => r.raw), "cv");
       }
 
-      // SG-5: Auto-complete roadmap items whose skill_id now appears in cv_skills
-      autoCompletedCount = await autoCompleteRoadmapItems(cvId, supabase);
-      if (autoCompletedCount > 0) {
-        console.log(`CV ${cvId} — auto-completed ${autoCompletedCount} roadmap items`);
-      }
+      await autoCompleteRoadmapItems(cvId, userId, admin);
     } catch (skillErr) {
-      // Non-critical — skill normalization failure does not fail the parse
       logger.error("Skill normalization error (non-critical)", { cvId }, skillErr);
     }
-
-    return successResponse({ success: true, cv_id: cvId, auto_completed_count: autoCompletedCount });
   } catch (error: unknown) {
     const message =
       error instanceof Error ? error.message : "Internal server error during parsing";
-    logger.error("CV parsing error", { route: "/api/cv/parse", cvId: innerCvId }, error);
-    if (innerCvId && adminClient) {
-      await markFailed(adminClient, innerCvId, message);
-    }
-    return errorResponse(message, 500);
+    logger.error("CV parsing background error", { route: "/api/cv/parse", cvId }, error);
+    await markFailed(admin, cvId, message);
   }
 }
 
